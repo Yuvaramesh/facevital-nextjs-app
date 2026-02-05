@@ -44,7 +44,7 @@ export default function HealthMonitorPage() {
   const ppgProcessorRef = useRef<PPGSignalProcessor | null>(null);
   const signalBufferRef = useRef<number[]>([]);
 
-  const RECORDING_DURATION = 30; // seconds
+  const RECORDING_DURATION = 60; // seconds
 
   // Helper function for fallback biomarker calculation
   const createFallbackBiomarkers = useCallback(
@@ -134,8 +134,8 @@ export default function HealthMonitorPage() {
       const quality = ppgProcessorRef.current.getSignalQuality();
       setSignalQuality(quality);
 
-      // Only calculate metrics after enough frames are collected
-      if (frameCountRef.current % 10 === 0 && frameCountRef.current > 30) {
+      if (frameCountRef.current % 10 === 0 && frameCountRef.current > 300) {
+        // Now requires 10 seconds of data before starting calculations
         const heartRate = ppgProcessorRef.current.getHeartRate();
         const breathingRate = ppgProcessorRef.current.getBreathingRate();
         const hrv = ppgProcessorRef.current.getHRV();
@@ -360,7 +360,7 @@ export default function HealthMonitorPage() {
                     {String(duration % 60).padStart(2, "0")}
                   </div>
                   <p className="text-xs text-slate-400 mt-2">
-                    {RECORDING_DURATION} seconds max
+                    {RECORDING_DURATION} seconds max (1 min)
                   </p>
                 </div>
 

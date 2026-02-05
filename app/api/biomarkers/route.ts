@@ -1,3 +1,6 @@
+// File: app/api/biomarkers/route.ts
+// This file MUST be placed at: app/api/biomarkers/route.ts
+
 import { NextRequest, NextResponse } from "next/server";
 import { calculateBiomarkers, BiomarkerData } from "@/lib/biomarkers";
 
