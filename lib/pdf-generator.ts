@@ -31,20 +31,9 @@ export async function generatePDF(reportData: ReportData): Promise<Blob> {
   const lineHeight = 24;
   const sectionSpacing = 40;
 
-  // Helper function to draw text
-  function drawText(
-    text: string,
-    size: number,
-    weight: string = "normal",
-    color = "#000000",
-  ) {
-    ctx.font = `${weight} ${size}px Arial, sans-serif`;
-    ctx.fillStyle = color;
-    ctx.fillText(text, 40, yPos);
-    yPos += lineHeight;
-  }
-
+  // Helper function to draw line
   function drawLine() {
+    if (!ctx) return;
     ctx.strokeStyle = "#e5e7eb";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -164,7 +153,7 @@ export async function generatePDF(reportData: ReportData): Promise<Blob> {
     },
   ];
 
-  metrics.forEach((metric, index) => {
+  metrics.forEach((metric) => {
     // Draw metric box
     ctx.fillStyle = metric.color + "15";
     ctx.strokeStyle = metric.color + "40";
@@ -283,10 +272,12 @@ export async function generatePDF(reportData: ReportData): Promise<Blob> {
   );
 
   // Convert canvas to blob
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) {
         resolve(blob);
+      } else {
+        reject(new Error("Failed to create blob from canvas"));
       }
     }, "image/png");
   });
@@ -296,7 +287,7 @@ export async function generatePDF(reportData: ReportData): Promise<Blob> {
 export async function downloadPDF(
   reportData: ReportData,
   filename: string = "Health_Report.pdf",
-) {
+): Promise<void> {
   const blob = await generatePDF(reportData);
 
   // Create a temporary canvas-based PDF (since we're using image)
