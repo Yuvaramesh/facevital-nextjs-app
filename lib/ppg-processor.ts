@@ -27,7 +27,7 @@ export class PPGSignalProcessor {
   private timestampBuffer: number[] = [];
   private maxBufferSize: number = 300; // ~10 seconds at 30fps
   private samplingRate: number = 30; // Hz (frames per second)
-  private peakThreshold: number = 0.5;
+  private peakThreshold: number = 0.3; // Lowered threshold for better peak detection
 
   /**
    * Extract average color values from a region of interest (face area)
@@ -187,22 +187,55 @@ export class PPGSignalProcessor {
       return 0; // Need at least 1 second of data
     }
 
-    const recentSignal = this.signalBuffer.slice(-150); // Last 5 seconds
+    // Use more recent data for heart rate (last 5-10 seconds)
+    const recentSignal = this.signalBuffer.slice(-150);
     const filtered = this.bandpassFilter(recentSignal);
     const normalized = this.normalizeSignal(filtered);
-    const peaks = this.detectPeaks(normalized, this.peakThreshold);
+
+    // Try multiple threshold levels to find peaks
+    let peaks = this.detectPeaks(normalized, this.peakThreshold);
+
+    // If no peaks found, try lower threshold
+    if (peaks.length < 2) {
+      peaks = this.detectPeaks(normalized, 0.2);
+    }
+
+    // If still no peaks, try even lower
+    if (peaks.length < 2) {
+      peaks = this.detectPeaks(normalized, 0.1);
+    }
 
     if (peaks.length < 2) {
       return 0;
     }
 
-    // Calculate average interval between peaks
-    let totalInterval = 0;
-    for (let i = 1; i < peaks.length; i++) {
-      totalInterval += peaks[i] - peaks[i - 1];
+    // Filter out suspicious peaks that are too close or too far apart
+    const filteredPeaks: number[] = [];
+    for (let i = 0; i < peaks.length; i++) {
+      if (i === 0) {
+        filteredPeaks.push(peaks[i]);
+      } else {
+        const interval = peaks[i] - peaks[i - 1];
+        // Accept intervals between 0.3-2 seconds (30-200 BPM at 30fps)
+        const minInterval = this.samplingRate * 0.3;
+        const maxInterval = this.samplingRate * 2;
+        if (interval >= minInterval && interval <= maxInterval) {
+          filteredPeaks.push(peaks[i]);
+        }
+      }
     }
 
-    const avgInterval = totalInterval / (peaks.length - 1);
+    if (filteredPeaks.length < 2) {
+      return 0;
+    }
+
+    // Calculate average interval between peaks
+    let totalInterval = 0;
+    for (let i = 1; i < filteredPeaks.length; i++) {
+      totalInterval += filteredPeaks[i] - filteredPeaks[i - 1];
+    }
+
+    const avgInterval = totalInterval / (filteredPeaks.length - 1);
     const beatDuration = avgInterval / this.samplingRate; // in seconds
     const heartRate = 60 / beatDuration;
 
@@ -221,17 +254,46 @@ export class PPGSignalProcessor {
     const recentSignal = this.signalBuffer.slice(-150);
     const filtered = this.bandpassFilter(recentSignal);
     const normalized = this.normalizeSignal(filtered);
-    const peaks = this.detectPeaks(normalized, this.peakThreshold);
+
+    let peaks = this.detectPeaks(normalized, this.peakThreshold);
+
+    if (peaks.length < 2) {
+      peaks = this.detectPeaks(normalized, 0.2);
+    }
+
+    if (peaks.length < 2) {
+      peaks = this.detectPeaks(normalized, 0.1);
+    }
 
     if (peaks.length < 2) {
       return 0;
     }
 
-    // Calculate RR intervals
+    // Filter peaks by interval validity
+    const filteredPeaks: number[] = [];
+    for (let i = 0; i < peaks.length; i++) {
+      if (i === 0) {
+        filteredPeaks.push(peaks[i]);
+      } else {
+        const interval = peaks[i] - peaks[i - 1];
+        const minInterval = this.samplingRate * 0.3;
+        const maxInterval = this.samplingRate * 2;
+        if (interval >= minInterval && interval <= maxInterval) {
+          filteredPeaks.push(peaks[i]);
+        }
+      }
+    }
+
+    if (filteredPeaks.length < 2) {
+      return 0;
+    }
+
+    // Calculate RR intervals in milliseconds (convert from samples)
     const rrIntervals: number[] = [];
-    for (let i = 1; i < peaks.length; i++) {
-      const interval = peaks[i] - peaks[i - 1];
-      rrIntervals.push(interval);
+    for (let i = 1; i < filteredPeaks.length; i++) {
+      const interval = filteredPeaks[i] - filteredPeaks[i - 1];
+      const intervalMs = (interval / this.samplingRate) * 1000; // Convert to ms
+      rrIntervals.push(intervalMs);
     }
 
     // Calculate SDNN (standard deviation of NN intervals)
@@ -243,8 +305,8 @@ export class PPGSignalProcessor {
       squaredDifferences.reduce((a, b) => a + b) / rrIntervals.length;
     const sdnn = Math.sqrt(variance);
 
-    // Scale SDNN to 0-100 range
-    return Math.round(Math.max(0, Math.min(100, sdnn * 2)));
+    // Scale SDNN to 0-100 range (typical SDNN 20-100ms for adults)
+    return Math.round(Math.max(0, Math.min(100, sdnn / 2)));
   }
 
   /**
@@ -256,62 +318,103 @@ export class PPGSignalProcessor {
     }
 
     const recentSignal = this.signalBuffer.slice(-300); // Last 10 seconds
-    const windowSize = Math.floor(this.samplingRate * 5); // 5-second windows
-    const envelopes: number[] = [];
 
-    // Extract respiratory component (envelope of PPG)
-    for (let i = 0; i < recentSignal.length - windowSize; i += windowSize / 2) {
-      const window = recentSignal.slice(i, i + windowSize);
-      const envelope = Math.max(...window) - Math.min(...window);
-      envelopes.push(envelope);
-    }
+    // Apply low-pass filter to extract respiratory component
+    const lowPassFiltered = this.lowPassFilter(recentSignal, 0.5);
+    const normalized = this.normalizeSignal(lowPassFiltered);
 
-    if (envelopes.length < 2) {
-      return 0;
-    }
-
-    const normalized = this.normalizeSignal(envelopes);
-    const peaks = this.detectPeaks(normalized, 0.4);
+    // Detect breathing peaks with lower threshold
+    const peaks = this.detectPeaks(normalized, 0.3);
 
     if (peaks.length < 2) {
+      console.log(
+        "[v0] PPG: Breathing peaks detected:",
+        peaks.length,
+        "need at least 2",
+      );
       return 0;
     }
 
-    const avgInterval =
-      peaks.reduce((sum, p, i, arr) => {
-        if (i < arr.length - 1) return sum + (arr[i + 1] - p);
-        return sum;
-      }, 0) /
-      (peaks.length - 1);
+    // Calculate average interval between peaks (in samples)
+    let totalInterval = 0;
+    for (let i = 1; i < peaks.length; i++) {
+      totalInterval += peaks[i] - peaks[i - 1];
+    }
 
-    const breathsPerSecond = 1 / (avgInterval * 5) / 2;
-    const breathingRate = breathsPerSecond * 60;
+    const avgInterval = totalInterval / (peaks.length - 1);
 
+    // Convert samples to seconds: avgInterval / samplingRate
+    const breathPeriod = avgInterval / this.samplingRate; // Time between breaths in seconds
+
+    // Breathing rate in breaths per minute
+    const breathingRate = 60 / breathPeriod;
+
+    console.log("[v0] PPG: Breathing rate calculated:", {
+      peaksCount: peaks.length,
+      avgInterval,
+      breathPeriod,
+      breathingRate: Math.round(breathingRate),
+    });
+
+    // Validate breathing rate is physiological (8-30 BPM for adults)
     return Math.round(Math.max(8, Math.min(30, breathingRate)));
+  }
+
+  /**
+   * Apply low-pass filter to extract slow respiratory signals
+   */
+  private lowPassFilter(signal: number[], cutoffRatio: number = 0.1): number[] {
+    const windowSize = Math.max(3, Math.floor(this.samplingRate * cutoffRatio));
+    const filtered: number[] = [];
+
+    for (let i = 0; i < signal.length; i++) {
+      const start = Math.max(0, i - windowSize);
+      const end = Math.min(signal.length, i + windowSize + 1);
+      let sum = 0;
+
+      for (let j = start; j < end; j++) {
+        sum += signal[j];
+      }
+
+      filtered.push(sum / (end - start));
+    }
+
+    return filtered;
   }
 
   /**
    * Get raw signal quality metric (0-100)
    */
   getSignalQuality(): number {
-    if (this.signalBuffer.length === 0) return 0;
+    if (this.signalBuffer.length < 15) return 0;
 
     const recentSignal = this.signalBuffer.slice(-30);
-    const amplitude = Math.max(...recentSignal) - Math.min(...recentSignal);
-    const noise =
-      recentSignal.reduce((sum, val, i, arr) => {
-        if (i < arr.length - 1) {
-          return sum + Math.abs(val - arr[i + 1]);
-        }
-        return sum;
-      }, 0) / recentSignal.length;
 
-    // Quality based on signal amplitude and smoothness
-    const qualityScore = Math.min(
+    // Calculate signal amplitude (DC variation)
+    const amplitude = Math.max(...recentSignal) - Math.min(...recentSignal);
+    const avgAmplitude =
+      recentSignal.reduce((a, b) => a + b, 0) / recentSignal.length;
+
+    // Amplitude should be at least 2% of mean to be valid
+    const amplitudeQuality = Math.min(
       100,
-      (amplitude * 100 + (1 - noise * 10) * 50) / 2,
+      (amplitude / (Math.abs(avgAmplitude) || 0.1)) * 50,
     );
-    return Math.round(Math.max(0, qualityScore));
+
+    // Calculate smoothness (lower is better - smooth signal)
+    const variations = [];
+    for (let i = 1; i < recentSignal.length; i++) {
+      variations.push(Math.abs(recentSignal[i] - recentSignal[i - 1]));
+    }
+
+    const avgVariation =
+      variations.reduce((a, b) => a + b, 0) / variations.length;
+    const smoothnessQuality = Math.max(0, 100 - avgVariation * 100);
+
+    // Combined quality score
+    const qualityScore = amplitudeQuality * 0.4 + smoothnessQuality * 0.6;
+
+    return Math.round(Math.max(0, Math.min(100, qualityScore)));
   }
 
   /**

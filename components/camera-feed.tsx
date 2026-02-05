@@ -7,11 +7,13 @@ import { useFaceDetection } from "@/hooks/use-face-detection";
 interface CameraFeedProps {
   onFrameCapture?: (canvasData: ImageData) => void;
   isRecording?: boolean;
+  onFaceDetected?: (face: any) => void;
 }
 
 export function CameraFeed({
   onFrameCapture,
   isRecording = false,
+  onFaceDetected,
 }: CameraFeedProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -20,12 +22,15 @@ export function CameraFeed({
   const [isCameraActive, setIsCameraActive] = useState(false);
   const animationFrameRef = useRef<number | null>(null);
   const [faceDetected, setFaceDetected] = useState(false);
+  const [detectedFace, setDetectedFace] = useState<any>(null);
 
   // Initialize face detection
   const { detectFace } = useFaceDetection({
     enabled: true,
     onFaceDetected: (face) => {
       setFaceDetected(face !== null);
+      setDetectedFace(face);
+      onFaceDetected?.(face);
     },
     onError: (err) => {
       console.error("[v0] Face detection error:", err.message);
