@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState } from "react";
 import { AlertCircle, Loader2 } from "lucide-react";
+import { useFaceDetection } from "@/hooks/use-face-detection";
 
 interface CameraFeedProps {
   onFrameCapture?: (canvasData: ImageData) => void;
@@ -17,7 +18,19 @@ export function CameraFeed({
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCameraActive, setIsCameraActive] = useState(false);
-  const animationFrameRef = useRef<number>();
+  const animationFrameRef = useRef<number | null>(null);
+  const [faceDetected, setFaceDetected] = useState(false);
+
+  // Initialize face detection
+  const { detectFace } = useFaceDetection({
+    enabled: true,
+    onFaceDetected: (face) => {
+      setFaceDetected(face !== null);
+    },
+    onError: (err) => {
+      console.error("[v0] Face detection error:", err.message);
+    },
+  });
 
   useEffect(() => {
     const startCamera = async () => {
@@ -73,7 +86,7 @@ export function CameraFeed({
     }
   }, [isRecording, isCameraActive]);
 
-  const processFrame = () => {
+  const processFrame = async () => {
     if (!videoRef.current || !canvasRef.current) {
       return;
     }
@@ -90,6 +103,13 @@ export function CameraFeed({
 
     // Draw video frame to canvas
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Detect face in the frame
+    try {
+      await detectFace(video);
+    } catch (err) {
+      console.log("[v0] Face detection skipped, continuing with frame capture");
+    }
 
     // Get image data from canvas
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -158,9 +178,11 @@ export function CameraFeed({
 
       {/* Face detection guide overlay */}
       {!error && isCameraActive && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <svg
-            className="w-40 h-40 text-green-400/30"
+            className={`w-40 h-40 transition-colors duration-300 ${
+              faceDetected ? "text-green-400" : "text-green-400/30"
+            }`}
             viewBox="0 0 200 200"
             fill="none"
             stroke="currentColor"
@@ -172,6 +194,15 @@ export function CameraFeed({
             <circle cx="85" cy="70" r="3" fill="currentColor" />
             <circle cx="115" cy="70" r="3" fill="currentColor" />
           </svg>
+          <p
+            className={`text-xs mt-4 transition-colors duration-300 ${
+              faceDetected ? "text-green-400" : "text-green-400/50"
+            }`}
+          >
+            {faceDetected
+              ? "✓ Face detected"
+              : "Position your face in the guide"}
+          </p>
         </div>
       )}
     </div>

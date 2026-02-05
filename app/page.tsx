@@ -6,13 +6,21 @@ import { BiomarkerMetrics } from "@/components/biomarker-metrics";
 import { LiveGraphs } from "@/components/live-graphs";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import {
-  calculateBiomarkers,
-  generateMockBiomarkerData,
-  BiomarkerData,
-} from "@/lib/biomarkers";
+import { calculateBiomarkers, BiomarkerData } from "@/lib/biomarkers";
 import { downloadPDF } from "@/lib/pdf-generator";
 import { Download, Play, Square, RotateCcw } from "lucide-react";
+import { PPGSignalProcessor, FaceROI } from "@/lib/ppg-processor";
+
+// Mock Biomarker Data Generator
+function generateMockBiomarkerData(): BiomarkerData {
+  return {
+    heartRate: Math.floor(Math.random() * (100 - 60 + 1)) + 60,
+    breathingRate: Math.floor(Math.random() * (20 - 10 + 1)) + 10,
+    hrv: Math.floor(Math.random() * (100 - 50 + 1)) + 50,
+    stressIndex: Math.floor(Math.random() * (100 - 0 + 1)),
+    wellnessValue: Math.floor(Math.random() * (100 - 0 + 1)),
+  };
+}
 
 interface GraphDataPoint {
   time: number;
@@ -33,39 +41,75 @@ export default function HealthMonitorPage() {
   const [selectedGraph, setSelectedGraph] = useState<
     "heartRate" | "breathing" | "all" | "stress"
   >("heartRate");
+  const [signalQuality, setSignalQuality] = useState(0);
 
   const recordingStartRef = useRef<number | null>(null);
   const durationIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const simulationIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const ppgProcessorRef = useRef<PPGSignalProcessor | null>(null);
+  const lastCalculationRef = useRef(0);
   const frameCountRef = useRef(0);
+  const simulationIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const RECORDING_DURATION = 30; // seconds
+  const CALCULATION_INTERVAL = 2000; // Calculate every 2 seconds for stability
 
-  // Handle frame capture from camera
+  // Initialize PPG processor on mount
+  useEffect(() => {
+    ppgProcessorRef.current = new PPGSignalProcessor();
+  }, []);
+
+  // Handle frame capture from camera with real PPG processing
   const handleFrameCapture = useCallback(
-    (imageData: ImageData) => {
-      if (!isRecording) return;
+    (imageData: ImageData, roi?: FaceROI) => {
+      if (!isRecording || !ppgProcessorRef.current || !roi) return;
 
-      frameCountRef.current += 1;
+      // Add frame to PPG processor for signal extraction
+      ppgProcessorRef.current.addFrame(imageData, roi);
 
-      // Generate biomarker data (simulated based on frame frequency)
-      // In production, this would analyze PPG signal from face detection
-      const biomarkerData = generateMockBiomarkerData();
-      setCurrentMetric(biomarkerData);
+      // Calculate biomarkers every 2 seconds for stability
+      const now = Date.now();
+      if (now - lastCalculationRef.current >= CALCULATION_INTERVAL) {
+        lastCalculationRef.current = now;
 
-      setMeasurements((prev) => [...prev, biomarkerData]);
+        // Get real biomarker calculations from PPG processor
+        const heartRate = ppgProcessorRef.current.getHeartRate();
+        const breathingRate = ppgProcessorRef.current.getBreathingRate();
+        const hrv = ppgProcessorRef.current.getHRV();
+        const signalQty = ppgProcessorRef.current.getSignalQuality();
 
-      // Update graph data
-      setGraphData((prev) => [
-        ...prev,
-        {
-          time: duration,
-          heartRate: biomarkerData.heartRate,
-          breathingRate: biomarkerData.breathingRate,
-          hrv: biomarkerData.hrv,
-          stress: biomarkerData.stressIndex,
-        },
-      ]);
+        setSignalQuality(signalQty);
+
+        // Only calculate if we have valid heart rate
+        if (heartRate > 0) {
+          // Use PPG-derived values with biomarker calculation
+          const signal = Array.from({ length: 30 }, () => Math.random()); // Placeholder for signal
+          const biomarkerData = calculateBiomarkers(signal, 30);
+
+          // Override with actual PPG values
+          const ppgBiomarkers: BiomarkerData = {
+            ...biomarkerData,
+            heartRate,
+            breathingRate,
+            hrv,
+            timestamp: Date.now(),
+          };
+
+          setCurrentMetric(ppgBiomarkers);
+          setMeasurements((prev) => [...prev, ppgBiomarkers]);
+
+          // Update graph data
+          setGraphData((prev) => [
+            ...prev,
+            {
+              time: duration,
+              heartRate: ppgBiomarkers.heartRate,
+              breathingRate: ppgBiomarkers.breathingRate,
+              hrv: ppgBiomarkers.hrv,
+              stress: ppgBiomarkers.stressIndex,
+            },
+          ]);
+        }
+      }
     },
     [isRecording, duration],
   );
@@ -77,8 +121,14 @@ export default function HealthMonitorPage() {
     setMeasurements([]);
     setGraphData([]);
     setCurrentMetric(null);
-    frameCountRef.current = 0;
+    setSignalQuality(0);
+    lastCalculationRef.current = 0;
     recordingStartRef.current = Date.now();
+
+    // Reset PPG processor
+    if (ppgProcessorRef.current) {
+      ppgProcessorRef.current.reset();
+    }
 
     // Update duration every second
     durationIntervalRef.current = setInterval(() => {
@@ -91,27 +141,6 @@ export default function HealthMonitorPage() {
         return newDuration;
       });
     }, 1000);
-
-    // Simulate frame capture during recording
-    simulationIntervalRef.current = setInterval(() => {
-      if (isRecording) {
-        const biomarkerData = generateMockBiomarkerData();
-        setCurrentMetric(biomarkerData);
-        setMeasurements((prev) => [...prev, biomarkerData]);
-        setGraphData((prev) => [
-          ...prev,
-          {
-            time: Math.floor(
-              (Date.now() - (recordingStartRef.current || 0)) / 1000,
-            ),
-            heartRate: biomarkerData.heartRate,
-            breathingRate: biomarkerData.breathingRate,
-            hrv: biomarkerData.hrv,
-            stress: biomarkerData.stressIndex,
-          },
-        ]);
-      }
-    }, 1000); // Update every second for visible changes
   }, []);
 
   // Stop recording
@@ -132,12 +161,12 @@ export default function HealthMonitorPage() {
     setMeasurements([]);
     setGraphData([]);
     setCurrentMetric(null);
-    frameCountRef.current = 0;
+    setSignalQuality(0);
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
     }
-    if (simulationIntervalRef.current) {
-      clearInterval(simulationIntervalRef.current);
+    if (ppgProcessorRef.current) {
+      ppgProcessorRef.current.reset();
     }
   }, []);
 
@@ -168,8 +197,7 @@ export default function HealthMonitorPage() {
     return () => {
       if (durationIntervalRef.current)
         clearInterval(durationIntervalRef.current);
-      if (simulationIntervalRef.current)
-        clearInterval(simulationIntervalRef.current);
+      if (ppgProcessorRef.current) ppgProcessorRef.current.reset();
     };
   }, []);
 
@@ -298,6 +326,24 @@ export default function HealthMonitorPage() {
                 <p className="text-2xl font-bold text-indigo-400 mt-1">
                   {measurements.length}
                 </p>
+              </Card>
+            )}
+
+            {/* Signal Quality */}
+            {isRecording && (
+              <Card className="bg-slate-800/50 border-slate-700 p-4">
+                <p className="text-xs text-slate-400">Signal Quality</p>
+                <div className="mt-2">
+                  <p className="text-2xl font-bold text-indigo-400">
+                    {signalQuality}%
+                  </p>
+                  <div className="mt-2 bg-slate-700 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-gradient-to-r from-indigo-500 to-purple-500 h-full transition-all duration-300"
+                      style={{ width: `${signalQuality}%` }}
+                    />
+                  </div>
+                </div>
               </Card>
             )}
           </div>
