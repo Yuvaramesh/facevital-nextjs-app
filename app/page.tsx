@@ -319,7 +319,7 @@ export default function HealthMonitorPage() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-white mb-2">
-            Health Biomarker Monitor
+            Face Vital Monitor
           </h1>
           <p className="text-slate-400">
             Real-time health metrics measurement using camera-based PPG analysis
