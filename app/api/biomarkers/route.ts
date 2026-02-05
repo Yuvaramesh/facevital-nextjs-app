@@ -16,9 +16,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (signal.length < 30) {
+    if (signal.length < 5) {
       return NextResponse.json(
-        { error: "Insufficient signal data. Need at least 30 samples." },
+        { error: "Insufficient signal data. Need at least 5 samples." },
         { status: 400 },
       );
     }
